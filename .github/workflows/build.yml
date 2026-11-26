@@ -1,0 +1,99 @@
+name: Build NOURology APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/build.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out NOURology-APK
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Download the NOURology web app
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p www
+
+          pages_url="https://nourali864202468-gif.github.io/NOURology/index.html"
+          raw_url="https://raw.githubusercontent.com/nourali864202468-gif/NOURology/main/index.html"
+
+          download_html() {
+            local url="$1"
+            curl --fail --location --silent --show-error --retry 3 --retry-all-errors \
+              "$url" --output www/index.html
+            test -s www/index.html
+            grep -Eiq '<!doctype html|<html' www/index.html
+            grep -qi 'NOURology' www/index.html
+          }
+
+          if download_html "$pages_url"; then
+            echo "Using the published GitHub Pages version of index.html."
+          elif download_html "$raw_url"; then
+            echo "Pages was unavailable; using index.html from the public NOURology main branch."
+          else
+            echo "::error::Could not download a valid NOURology index.html from Pages or the source repository."
+            exit 1
+          fi
+
+          curl --fail --location --silent --show-error --retry 3 --retry-all-errors \
+            "https://raw.githubusercontent.com/nourali864202468-gif/NOURology/main/icon.jpeg" \
+            --output www/icon.jpeg
+
+          if [[ -f icon.png ]]; then
+            cp icon.png www/icon.png
+            echo "Included icon.png from the root of NOURology-APK."
+          else
+            echo "::notice::No root icon.png is present in NOURology-APK; the NOURology source icon.jpeg was included instead."
+          fi
+
+      - name: Create the Capacitor Android project
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm init -y
+          npm install --save-exact \
+            @capacitor/core@8.6.3 \
+            @capacitor/cli@8.6.3 \
+            @capacitor/android@8.6.3
+          npx cap init NOURology com.nourology.app --web-dir=www
+          npx cap add android
+          npx cap sync android
+
+      - name: Build the debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd android
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace assembleDebug
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v6
+        with:
+          name: NOURology-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
